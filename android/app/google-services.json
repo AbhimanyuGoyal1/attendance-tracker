@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "674231761225",
+    "project_id": "attendancetracker-25ddb",
+    "storage_bucket": "attendancetracker-25ddb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:674231761225:android:12faa0439f4d67ae8c0298",
+        "android_client_info": {
+          "package_name": "com.example.attendance_tracker"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "674231761225-cinl3ptabkkvus7dr2q5d57ppm813b4m.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.attendance_tracker",
+            "certificate_hash": "41cbc48b4ff0fa699a2ec225083693a672bd05d0"
+          }
+        },
+        {
+          "client_id": "674231761225-c6ibicppm013cvre29c7cops5ane7h96.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBS_c3enbS52CAnBpGHmMLcZrUyxAfJcp4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "674231761225-c6ibicppm013cvre29c7cops5ane7h96.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

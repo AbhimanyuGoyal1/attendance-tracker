@@ -1,0 +1,1101 @@
+1	import 'package:flutter/material.dart';
+2	import 'package:get/get.dart';
+3	import '../models/subject.dart';
+4	import '../models/app_settings.dart';
+5	import 'add_subject_screen.dart';
+6	import 'timetable_screen.dart';
+7	import '../widgets/subject_tile.dart';
+8	import '../widgets/animated_fade_slide.dart';
+9	import '../services/notification_service.dart';
+10	import '../services/android_power_settings_service.dart';
+11	import 'analytics_screen.dart';
+12	import 'settings_screen.dart';
+13	import 'edit_subject_schedule_screen.dart';
+14	import '../controllers/home_controller.dart';
+15	
+16	class HomeScreen extends StatefulWidget {
+17	  final AppSettings settings;
+18	  final ValueChanged<AppSettings> onSettingsChanged;
+19	  const HomeScreen({
+20	    super.key,
+21	    required this.settings,
+22	    required this.onSettingsChanged,
+23	  });
+24	
+25	  @override
+26	  State<HomeScreen> createState() => _HomeScreenState();
+27	}
+28	
+29	class _HomeScreenState extends State<HomeScreen> {
+30	  late final HomeController _homeController;
+31	  final NotificationService _notificationService = NotificationService();
+32	  final AndroidPowerSettingsService _powerSettingsService =
+33	      AndroidPowerSettingsService();
+34	  late AppSettings _settings;
+35	  List<Subject> get subjects => _homeController.subjects;
+36	  String get _syncState => _homeController.syncState.value;
+37	  String get _subjectsKey => _homeController.subjectsKey;
+38	
+39	  @override
+40	  void initState() {
+41	    super.initState();
+42	    _homeController = Get.put(HomeController(), tag: 'home_controller');
+43	    _settings = widget.settings;
+44	    _homeController.initialize(_settings);
+45	    Future.microtask(_syncReminders);
+46	  }
+47	
+48	  @override
+49	  void didUpdateWidget(covariant HomeScreen oldWidget) {
+50	    super.didUpdateWidget(oldWidget);
+51	    if (oldWidget.settings != widget.settings) {
+52	      _settings = widget.settings;
+53	      _homeController.setSettings(_settings);
+54	    }
+55	  }
+56	
+57	  @override
+58	  void dispose() {
+59	    Get.delete<HomeController>(tag: 'home_controller', force: true);
+60	    super.dispose();
+61	  }
+62	
+63	  void addSubject(Subject subject) {
+64	    _homeController.addSubject(subject);
+65	    if (subject.remindersEnabled) {
+66	      _notificationService.scheduleSubjectReminders(
+67	        subject,
+68	        semesterKey: _subjectsKey,
+69	      );
+70	    }
+71	  }
+72	
+73	  void deleteSubject(int index) async {
+74	    final confirmed = await showDialog<bool>(
+75	      context: context,
+76	      builder: (context) => AlertDialog(
+77	        title: const Text("Delete Subject?"),
+78	        content: const Text(
+79	          "Are you sure you want to delete this subject? All attendance records will be permanently deleted.",
+80	        ),
+81	        actions: [
+82	          TextButton(
+83	            onPressed: () => Navigator.pop(context, false),
+84	            child: const Text("Cancel"),
+85	          ),
+86	          ElevatedButton(
+87	            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+88	            onPressed: () => Navigator.pop(context, true),
+89	            child: const Text("Delete"),
+90	          ),
+91	        ],
+92	      ),
+93	    );
+94	
+95	    if (confirmed == true) {
+96	      final target = _homeController.removeSubjectAt(index);
+97	      await _homeController.deleteRemoteSubject(target.id);
+98	    }
+99	  }
+100	
+101	  @override
+102	  Widget build(BuildContext context) {
+103	    return Obx(() {
+104	      final today = DateTime.now();
+105	      final scheme = Theme.of(context).colorScheme;
+106	      final bottomInset = MediaQuery.of(context).viewPadding.bottom;
+107	
+108	      final todaysLectures = <_LectureEntry>[];
+109	      for (var subject in subjects) {
+110	        final slots = subject.getSlotsFor(today);
+111	        for (int i = 0; i < slots.length; i++) {
+112	          final originalDate = subject.getOriginalDate(today, i);
+113	          todaysLectures.add(
+114	            _LectureEntry(
+115	              subject: subject,
+116	              slot: slots[i],
+117	              slotIndex: i,
+118	              originalWeekday: originalDate.weekday,
+119	            ),
+120	          );
+121	        }
+122	      }
+123	
+124	      final totalAttended = subjects.fold<int>(0, (s, e) => s + e.attended);
+125	      final totalClasses = subjects.fold<int>(0, (s, e) => s + e.total);
+126	      final overallPercent =
+127	          totalClasses == 0 ? 0 : (totalAttended / totalClasses) * 100;
+128	
+129	      return Scaffold(
+130	      appBar: AppBar(
+131	        title: const Text("Attendance Tracker"),
+132	        actions: [
+133	          IconButton(
+134	            icon: const Icon(Icons.settings_outlined),
+135	            onPressed: () async {
+136	              await Navigator.push(
+137	                context,
+138	                MaterialPageRoute(
+139	                  builder: (_) => SettingsScreen(
+140	                    settings: _settings,
+141	                    onChanged: (updated) {
+142	                      if (!mounted) return;
+143	                      _settings = updated;
+144	                      _homeController.setSettings(updated);
+145	                      widget.onSettingsChanged(updated);
+146	                    },
+147	                  ),
+148	                ),
+149	              );
+150	              _homeController.saveSubjects();
+151	            },
+152	          ),
+153	          IconButton(
+154	            icon: const Icon(Icons.analytics_outlined),
+155	            onPressed: () => Navigator.push(
+156	              context,
+157	              MaterialPageRoute(
+158	                builder: (_) => AnalyticsScreen(subjects: subjects),
+159	              ),
+160	            ),
+161	          ),
+162	          IconButton(
+163	            icon: const Icon(Icons.calendar_today),
+164	            onPressed: () async {
+165	              await Navigator.push(
+166	                context,
+167	                MaterialPageRoute(
+168	                  builder: (_) => TimetableScreen(
+169	                    subjects: subjects,
+170	                    onChanged: _homeController.saveSubjects,
+171	                  ),
+172	                ),
+173	              );
+174	              _homeController.loadSubjects();
+175	            },
+176	          ),
+177	        ],
+178	      ),
+179	      body: Center(
+180	        child: ConstrainedBox(
+181	          constraints: const BoxConstraints(maxWidth: 980),
+182	          child: ListView(
+183	            padding: EdgeInsets.fromLTRB(16, 8, 16, 100 + bottomInset),
+184	            children: [
+185	          AnimatedFadeSlide(
+186	            child: Container(
+187	            padding: const EdgeInsets.all(16),
+188	            decoration: BoxDecoration(
+189	              borderRadius: BorderRadius.circular(20),
+190	              boxShadow: [
+191	                BoxShadow(
+192	                  color: Theme.of(context).colorScheme.shadow.withValues(alpha: 0.12),
+193	                  blurRadius: 22,
+194	                  offset: const Offset(0, 10),
+195	                ),
+196	              ],
+197	              gradient: LinearGradient(
+198	                colors: [
+199	                  Theme.of(context).colorScheme.primary,
+200	                  Theme.of(context).colorScheme.secondary,
+201	                ],
+202	                begin: Alignment.topLeft,
+203	                end: Alignment.bottomRight,
+204	              ),
+205	            ),
+206	            child: Row(
+207	              children: [
+208	                Expanded(
+209	                  child: Column(
+210	                    crossAxisAlignment: CrossAxisAlignment.start,
+211	                    children: [
+212	                      Text(
+213	                        "Today",
+214	                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+215	                              color: Colors.white70,
+216	                            ),
+217	                      ),
+218	                      Text(
+219	                        "${today.month}/${today.day}/${today.year}",
+220	                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+221	                              color: Colors.white,
+222	                              fontWeight: FontWeight.w700,
+223	                            ),
+224	                      ),
+225	                    ],
+226	                  ),
+227	                ),
+228	                Column(
+229	                  crossAxisAlignment: CrossAxisAlignment.end,
+230	                  children: [
+231	                    Text(
+232	                      "Overall",
+233	                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+234	                            color: Colors.white70,
+235	                          ),
+236	                    ),
+237	                    Text(
+238	                      "${overallPercent.toStringAsFixed(1)}%",
+239	                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+240	                            color: Colors.white,
+241	                            fontWeight: FontWeight.w700,
+242	                          ),
+243	                    ),
+244	                    Text(
+245	                      "$totalAttended/$totalClasses",
+246	                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+247	                            color: Colors.white70,
+248	                          ),
+249	                    ),
+250	                    Text(
+251	                      _syncState,
+252	                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+253	                            color: Colors.white70,
+254	                          ),
+255	                    ),
+256	                  ],
+257	                ),
+258	              ],
+259	            ),
+260	          )),
+261	          const SizedBox(height: 16),
+262	          AnimatedFadeSlide(
+263	            delay: const Duration(milliseconds: 80),
+264	            child: _SectionHeader(
+265	            title: "Today's Lectures",
+266	            subtitle:
+267	                todaysLectures.isEmpty ? "No lectures today" : "${todaysLectures.length} scheduled",
+268	          )),
+269	          if (todaysLectures.any(
+270	            (e) => e.subject.getAttendanceFor(today)?[e.slotIndex] == null,
+271	          ))
+272	            Align(
+273	              alignment: Alignment.centerLeft,
+274	              child: TextButton.icon(
+275	                onPressed: () => _startDailyMarkFlow(todaysLectures, today),
+276	                icon: const Icon(Icons.play_circle_outline),
+277	                label: const Text('Mark pending'),
+278	              ),
+279	            ),
+280	          const SizedBox(height: 8),
+281	          if (todaysLectures.isEmpty)
+282	            Card(
+283	              child: Padding(
+284	                padding: const EdgeInsets.all(16),
+285	                child: Text(
+286	                  "You're all clear for today.",
+287	                  style: TextStyle(color: scheme.onSurfaceVariant),
+288	                ),
+289	              ),
+290	            )
+291	          else
+292	            ...todaysLectures.map((entry) {
+293	              final status = entry.subject.getAttendanceFor(
+294	                today,
+295	              )?[entry.slotIndex];
+296	
+297	              final statusData = _getStatusData(
+298	                status: status,
+299	                slotDate: today,
+300	                originalWeekday: entry.originalWeekday,
+301	              );
+302	
+303	              return AnimatedFadeSlide(
+304	                delay: Duration(milliseconds: 120 + (entry.slotIndex * 35)),
+305	                child: _LectureCard(
+306	                idKey:
+307	                    '${entry.subject.id}_${today.toIso8601String()}_${entry.slotIndex}',
+308	                title: entry.subject.name,
+309	                time: entry.slot.format(context),
+310	                statusText: statusData.text,
+311	                statusColor: statusData.color,
+312	                onPresent: () => _mark(
+313	                  entry.subject,
+314	                  today,
+315	                  entry.slotIndex,
+316	                  AttendanceStatus.present,
+317	                ),
+318	                onAbsent: () => _mark(
+319	                  entry.subject,
+320	                  today,
+321	                  entry.slotIndex,
+322	                  AttendanceStatus.absent,
+323	                ),
+324	                onCancel: () => _handleCancelOrReschedule(
+325	                  entry.subject,
+326	                  today,
+327	                  entry.slotIndex,
+328	                  entry.slot,
+329	                ),
+330	                activeStatus: status,
+331	                swipeEnabled: _settings.enableSwipeActions,
+332	                onSwipePresent: () => _mark(
+333	                  entry.subject,
+334	                  today,
+335	                  entry.slotIndex,
+336	                  AttendanceStatus.present,
+337	                ),
+338	                onSwipeAbsent: () => _mark(
+339	                  entry.subject,
+340	                  today,
+341	                  entry.slotIndex,
+342	                  AttendanceStatus.absent,
+343	                ),
+344	              ));
+345	            }),
+346	          const SizedBox(height: 16),
+347	          AnimatedFadeSlide(
+348	            delay: const Duration(milliseconds: 120),
+349	            child: _SectionHeader(
+350	            title: "All Subjects",
+351	            subtitle: subjects.isEmpty ? "Add your first subject" : "${subjects.length} total",
+352	          )),
+353	          const SizedBox(height: 8),
+354	          if (subjects.isEmpty)
+355	            Card(
+356	              child: Padding(
+357	                padding: const EdgeInsets.all(16),
+358	                child: Text(
+359	                  "No subjects added yet.\nTap + to add one.",
+360	                  textAlign: TextAlign.center,
+361	                  style: TextStyle(color: scheme.onSurfaceVariant),
+362	                ),
+363	              ),
+364	            )
+365	          else
+366	            ...subjects.asMap().entries.map((entry) {
+367	              final index = entry.key;
+368	              final subject = entry.value;
+369	              return AnimatedFadeSlide(
+370	                delay: Duration(milliseconds: 140 + (index * 35)),
+371	                child: SubjectTile(
+372	                subject: subject,
+373	                onDelete: () => deleteSubject(index),
+374	                onForecast: () => _showForecast(subject),
+375	                onToggleReminder: () => _showReminderSheet(subject),
+376	                onSetGoal: () => _showGoalSheet(subject),
+377	                onEditSlots: () => _editSubjectSlots(subject),
+378	                compact: _settings.compactHomeCards,
+379	                showTrend: _settings.showWeeklyTrend,
+380	                showForecastHint: _settings.showForecastHints,
+381	              ));
+382	            }),
+383	            ],
+384	          ),
+385	        ),
+386	      ),
+387	      floatingActionButton: Padding(
+388	        padding: EdgeInsets.only(bottom: bottomInset),
+389	        child: FloatingActionButton(
+390	          onPressed: () async {
+391	            final result = await Navigator.push(
+392	              context,
+393	              MaterialPageRoute(builder: (_) => const AddSubjectScreen()),
+394	            );
+395	            if (result is Subject) addSubject(result);
+396	          },
+397	          child: const Icon(Icons.add),
+398	        ),
+399	      ),
+400	    );
+401	    });
+402	  }
+403	
+404	  void _mark(
+405	    Subject subject,
+406	    DateTime date,
+407	    int slotIndex,
+408	    AttendanceStatus status,
+409	  ) {
+410	    final previous = subject.getAttendanceFor(date)?[slotIndex];
+411	    _homeController.markAttendance(subject, date, slotIndex, status);
+412	    _showUndoMark(subject, date, slotIndex, previous);
+413	  }
+414	
+415	  Future<void> _handleCancelOrReschedule(
+416	    Subject subject,
+417	    DateTime date,
+418	    int slotIndex,
+419	    LectureSlot slot,
+420	  ) async {
+421	    final newDate = await showDatePicker(
+422	      context: context,
+423	      initialDate: date,
+424	      firstDate: date,
+425	      lastDate: DateTime(date.year + 1),
+426	    );
+427	
+428	    if (newDate != null) {
+429	      if (!mounted) return;
+430	      final newStart = await showTimePicker(
+431	        context: context,
+432	        initialTime: slot.start,
+433	      );
+434	
+435	      if (newStart != null) {
+436	        final durationMinutes = _durationInMinutes(slot.start, slot.end);
+437	        final newEnd = _addMinutes(newStart, durationMinutes);
+438	        final newSlot = LectureSlot(start: newStart, end: newEnd);
+439	
+440	        _homeController.rescheduleAndCancel(
+441	          subject,
+442	          date,
+443	          slotIndex,
+444	          newDate,
+445	          newSlot,
+446	        );
+447	        return;
+448	      }
+449	    }
+450	
+451	    _homeController.cancelLecture(subject, date, slotIndex);
+452	    _showUndoMark(subject, date, slotIndex, null);
+453	  }
+454	
+455	  void _showUndoMark(
+456	    Subject subject,
+457	    DateTime date,
+458	    int slotIndex,
+459	    AttendanceStatus? previous,
+460	  ) {
+461	    ScaffoldMessenger.of(context).showSnackBar(
+462	      SnackBar(
+463	        content: const Text('Attendance updated'),
+464	        action: SnackBarAction(
+465	          label: 'Undo',
+466	          onPressed: () {
+467	            _homeController.markAttendance(subject, date, slotIndex, previous);
+468	          },
+469	        ),
+470	      ),
+471	    );
+472	    });
+473	  }
+474	
+475	  _StatusData _getStatusData({
+476	    required AttendanceStatus? status,
+477	    required DateTime slotDate,
+478	    required int originalWeekday,
+479	  }) {
+480	    final isRescheduled = slotDate.weekday != originalWeekday;
+481	    switch (status) {
+482	      case AttendanceStatus.present:
+483	        return _StatusData(
+484	          isRescheduled ? "Present (Rescheduled)" : "Present",
+485	          Colors.green,
+486	        );
+487	      case AttendanceStatus.absent:
+488	        return _StatusData(
+489	          isRescheduled ? "Absent (Rescheduled)" : "Absent",
+490	          Colors.red,
+491	        );
+492	      case AttendanceStatus.cancelled:
+493	        return _StatusData(
+494	          isRescheduled ? "Cancelled (Rescheduled)" : "Cancelled",
+495	          Colors.orange,
+496	        );
+497	      default:
+498	        return _StatusData(
+499	          isRescheduled ? "Not marked (Rescheduled)" : "Not marked",
+500	          Colors.grey,
+501	        );
+502	    }
+503	  }
+504	
+505	  int _durationInMinutes(TimeOfDay start, TimeOfDay end) {
+506	    final startMinutes = start.hour * 60 + start.minute;
+507	    final endMinutes = end.hour * 60 + end.minute;
+508	    final delta = (endMinutes - startMinutes) % (24 * 60);
+509	    return delta == 0 ? 24 * 60 : delta;
+510	  }
+511	
+512	  TimeOfDay _addMinutes(TimeOfDay start, int minutes) {
+513	    final total = (start.hour * 60 + start.minute + minutes) % (24 * 60);
+514	    return TimeOfDay(hour: total ~/ 60, minute: total % 60);
+515	  }
+516	
+517	  Future<void> _showForecast(Subject subject) async {
+518	    var nextCount = 3;
+519	    await showModalBottomSheet<void>(
+520	      context: context,
+521	      isScrollControlled: true,
+522	      builder: (context) {
+523	        return StatefulBuilder(
+524	          builder: (context, setSheetState) {
+525	            final forecast = subject.forecast(nextCount);
+526	            return Padding(
+527	              padding: EdgeInsets.only(
+528	                left: 16,
+529	                right: 16,
+530	                top: 16,
+531	                bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+532	              ),
+533	              child: Column(
+534	                mainAxisSize: MainAxisSize.min,
+535	                crossAxisAlignment: CrossAxisAlignment.start,
+536	                children: [
+537	                  Text(
+538	                    "Attendance Forecast",
+539	                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+540	                          fontWeight: FontWeight.w700,
+541	                        ),
+542	                  ),
+543	                  const SizedBox(height: 6),
+544	                  Text(
+545	                    subject.name,
+546	                    style: Theme.of(context).textTheme.bodyMedium,
+547	                  ),
+548	                  const SizedBox(height: 16),
+549	                  Text("Next $nextCount classes"),
+550	                  Slider(
+551	                    value: nextCount.toDouble(),
+552	                    min: 1,
+553	                    max: 10,
+554	                    divisions: 9,
+555	                    label: "$nextCount",
+556	                    onChanged: (v) => setSheetState(() {
+557	                      nextCount = v.round();
+558	                    }),
+559	                  ),
+560	                  const SizedBox(height: 12),
+561	                  Row(
+562	                    children: [
+563	                      Expanded(
+564	                        child: _ForecastCard(
+565	                          title: "If you attend",
+566	                          value:
+567	                              "${forecast.attendNextPct.toStringAsFixed(1)}%",
+568	                          color: const Color(0xFF22C55E),
+569	                        ),
+570	                      ),
+571	                      const SizedBox(width: 12),
+572	                      Expanded(
+573	                        child: _ForecastCard(
+574	                          title: "If you miss",
+575	                          value:
+576	                              "${forecast.missNextPct.toStringAsFixed(1)}%",
+577	                          color: const Color(0xFFEF4444),
+578	                        ),
+579	                      ),
+580	                    ],
+581	                  ),
+582	                  const SizedBox(height: 12),
+583	                  Align(
+584	                    alignment: Alignment.centerRight,
+585	                    child: TextButton(
+586	                      onPressed: () => Navigator.pop(context),
+587	                      child: const Text("Close"),
+588	                    ),
+589	                  ),
+590	                ],
+591	              ),
+592	            );
+593	          },
+594	        );
+595	      },
+596	    );
+597	  }
+598	
+599	  Future<void> _showReminderSheet(Subject subject) async {
+600	    final minutesOptions = [5, 10, 15, 30, 60];
+601	    var enabled = subject.remindersEnabled;
+602	    var selected = subject.reminderMinutes;
+603	
+604	    final saved = await showModalBottomSheet<bool>(
+605	      context: context,
+606	      isScrollControlled: true,
+607	      builder: (context) {
+608	        return StatefulBuilder(
+609	          builder: (context, setSheetState) {
+610	            return Padding(
+611	              padding: EdgeInsets.only(
+612	                left: 16,
+613	                right: 16,
+614	                top: 16,
+615	                bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+616	              ),
+617	              child: Column(
+618	                mainAxisSize: MainAxisSize.min,
+619	                crossAxisAlignment: CrossAxisAlignment.start,
+620	                children: [
+621	                  Text(
+622	                    "Lecture Reminders",
+623	                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+624	                          fontWeight: FontWeight.w700,
+625	                        ),
+626	                  ),
+627	                  const SizedBox(height: 6),
+628	                  Text(subject.name),
+629	                  const SizedBox(height: 12),
+630	                  SwitchListTile(
+631	                    contentPadding: EdgeInsets.zero,
+632	                    title: const Text("Enable reminders"),
+633	                    value: enabled,
+634	                    onChanged: (v) => setSheetState(() => enabled = v),
+635	                  ),
+636	                  const SizedBox(height: 8),
+637	                  Text(
+638	                    "Notify me before class",
+639	                    style: Theme.of(context).textTheme.labelMedium,
+640	                  ),
+641	                  const SizedBox(height: 8),
+642	                  Wrap(
+643	                    spacing: 8,
+644	                    children: minutesOptions
+645	                        .map(
+646	                          (m) => ChoiceChip(
+647	                            label: Text("$m min"),
+648	                            selected: selected == m,
+649	                            onSelected: enabled
+650	                                ? (_) => setSheetState(() => selected = m)
+651	                                : null,
+652	                          ),
+653	                        )
+654	                        .toList(),
+655	                  ),
+656	                  const SizedBox(height: 16),
+657	                  Row(
+658	                    children: [
+659	                      TextButton(
+660	                        onPressed: () => Navigator.pop(context, false),
+661	                        child: const Text("Cancel"),
+662	                      ),
+663	                      const Spacer(),
+664	                      ElevatedButton(
+665	                        onPressed: () => Navigator.pop(context, true),
+666	                        child: const Text("Save"),
+667	                      ),
+668	                    ],
+669	                  ),
+670	                ],
+671	              ),
+672	            );
+673	          },
+674	        );
+675	      },
+676	    );
+677	    if (saved != true) return;
+678	
+679	    if (enabled) {
+680	      final granted = await _notificationService.ensurePermissions();
+681	      if (!granted) {
+682	        if (!mounted) return;
+683	        ScaffoldMessenger.of(context).showSnackBar(
+684	          const SnackBar(
+685	            content: Text(
+686	              'Notification permission is off. Enable it from app settings.',
+687	            ),
+688	          ),
+689	        );
+690	      } else {
+691	        await _powerSettingsService.showSetupDialog(context);
+692	      }
+693	    }
+694	
+695	    _homeController.updateReminder(
+696	      subject,
+697	      enabled: enabled,
+698	      minutes: selected,
+699	    );
+700	
+701	    await _notificationService.cancelSubjectReminders(subject);
+702	    if (subject.remindersEnabled) {
+703	      await _notificationService.scheduleSubjectReminders(
+704	        subject,
+705	        semesterKey: _subjectsKey,
+706	      );
+707	    }
+708	  }
+709	
+710	  Future<void> _showGoalSheet(Subject subject) async {
+711	    var selected = subject.goalPercent;
+712	    final saved = await showModalBottomSheet<bool>(
+713	      context: context,
+714	      builder: (context) {
+715	        return StatefulBuilder(
+716	          builder: (context, setSheetState) {
+717	            return Padding(
+718	              padding: const EdgeInsets.all(16),
+719	              child: Column(
+720	                mainAxisSize: MainAxisSize.min,
+721	                crossAxisAlignment: CrossAxisAlignment.start,
+722	                children: [
+723	                  Text(
+724	                    'Set attendance goal',
+725	                    style: Theme.of(context).textTheme.titleMedium,
+726	                  ),
+727	                  const SizedBox(height: 10),
+728	                  Wrap(
+729	                    spacing: 8,
+730	                    children: [75.0, 80.0, 85.0, 90.0]
+731	                        .map(
+732	                          (v) => ChoiceChip(
+733	                            label: Text('${v.toInt()}%'),
+734	                            selected: selected == v,
+735	                            onSelected: (_) => setSheetState(() => selected = v),
+736	                          ),
+737	                        )
+738	                        .toList(),
+739	                  ),
+740	                  const SizedBox(height: 12),
+741	                  Slider(
+742	                    min: 60,
+743	                    max: 95,
+744	                    divisions: 7,
+745	                    value: selected,
+746	                    label: '${selected.toInt()}%',
+747	                    onChanged: (v) => setSheetState(() => selected = v),
+748	                  ),
+749	                  Align(
+750	                    alignment: Alignment.centerRight,
+751	                    child: ElevatedButton(
+752	                      onPressed: () => Navigator.pop(context, true),
+753	                      child: const Text('Save'),
+754	                    ),
+755	                  ),
+756	                ],
+757	              ),
+758	            );
+759	          },
+760	        );
+761	      },
+762	    );
+763	    if (saved != true) return;
+764	    _homeController.updateGoal(subject, selected);
+765	  }
+766	
+767	  Future<void> _startDailyMarkFlow(
+768	    List<_LectureEntry> todaysLectures,
+769	    DateTime date,
+770	  ) async {
+771	    for (final entry in todaysLectures) {
+772	      final status = entry.subject.getAttendanceFor(date)?[entry.slotIndex];
+773	      if (status != null) continue;
+774	      final action = await showModalBottomSheet<AttendanceStatus>(
+775	        context: context,
+776	        builder: (context) {
+777	          return SafeArea(
+778	            child: Padding(
+779	              padding: const EdgeInsets.all(16),
+780	              child: Column(
+781	                mainAxisSize: MainAxisSize.min,
+782	                children: [
+783	                  Text(
+784	                    '${entry.subject.name} (${entry.slot.format(context)})',
+785	                    style: Theme.of(context).textTheme.titleMedium,
+786	                  ),
+787	                  const SizedBox(height: 10),
+788	                  Row(
+789	                    children: [
+790	                      Expanded(
+791	                        child: ElevatedButton(
+792	                          onPressed: () =>
+793	                              Navigator.pop(context, AttendanceStatus.present),
+794	                          child: const Text('Present'),
+795	                        ),
+796	                      ),
+797	                      const SizedBox(width: 8),
+798	                      Expanded(
+799	                        child: ElevatedButton(
+800	                          onPressed: () =>
+801	                              Navigator.pop(context, AttendanceStatus.absent),
+802	                          child: const Text('Absent'),
+803	                        ),
+804	                      ),
+805	                    ],
+806	                  ),
+807	                ],
+808	              ),
+809	            ),
+810	          );
+811	        },
+812	      );
+813	      if (action != null) {
+814	        _mark(entry.subject, date, entry.slotIndex, action);
+815	      }
+816	    }
+817	  }
+818	
+819	  Future<void> _syncReminders() async {
+820	    for (final subject in subjects) {
+821	      if (subject.remindersEnabled) {
+822	        await _notificationService.cancelSubjectReminders(subject);
+823	        await _notificationService.scheduleSubjectReminders(
+824	          subject,
+825	          semesterKey: _subjectsKey,
+826	        );
+827	      }
+828	    }
+829	  }
+830	
+831	  Future<void> _editSubjectSlots(Subject subject) async {
+832	    final updated = await Navigator.push<Map<int, List<LectureSlot>>>(
+833	      context,
+834	      MaterialPageRoute(
+835	        builder: (_) => EditSubjectScheduleScreen(subject: subject),
+836	      ),
+837	    );
+838	    if (updated == null) return;
+839	    _homeController.updateWeeklySchedule(subject, updated);
+840	    await _notificationService.cancelSubjectReminders(subject);
+841	    if (subject.remindersEnabled) {
+842	      await _notificationService.scheduleSubjectReminders(
+843	        subject,
+844	        semesterKey: _subjectsKey,
+845	      );
+846	    }
+847	  }
+848	}
+849	
+850	class _ForecastCard extends StatelessWidget {
+851	  final String title;
+852	  final String value;
+853	  final Color color;
+854	
+855	  const _ForecastCard({
+856	    required this.title,
+857	    required this.value,
+858	    required this.color,
+859	  });
+860	
+861	  @override
+862	  Widget build(BuildContext context) {
+863	    return Container(
+864	      padding: const EdgeInsets.all(12),
+865	      decoration: BoxDecoration(
+866	        color: color.withValues(alpha: 0.08),
+867	        borderRadius: BorderRadius.circular(14),
+868	        border: Border.all(color: color.withValues(alpha: 0.2)),
+869	      ),
+870	      child: Column(
+871	        crossAxisAlignment: CrossAxisAlignment.start,
+872	        children: [
+873	          Text(
+874	            title,
+875	            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+876	                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+877	                ),
+878	          ),
+879	          const SizedBox(height: 6),
+880	          Text(
+881	            value,
+882	            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+883	                  fontWeight: FontWeight.w700,
+884	                  color: color,
+885	                ),
+886	          ),
+887	        ],
+888	      ),
+889	    );
+890	    });
+891	  }
+892	}
+893	
+894	class _SectionHeader extends StatelessWidget {
+895	  final String title;
+896	  final String subtitle;
+897	
+898	  const _SectionHeader({required this.title, required this.subtitle});
+899	
+900	  @override
+901	  Widget build(BuildContext context) {
+902	    return Row(
+903	      children: [
+904	        Text(
+905	          title,
+906	          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+907	                fontWeight: FontWeight.w700,
+908	              ),
+909	        ),
+910	        const SizedBox(width: 12),
+911	        Expanded(
+912	          child: Text(
+913	            subtitle,
+914	            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+915	                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+916	                ),
+917	            overflow: TextOverflow.ellipsis,
+918	          ),
+919	        ),
+920	      ],
+921	    );
+922	  }
+923	}
+924	
+925	class _LectureCard extends StatelessWidget {
+926	  final String idKey;
+927	  final String title;
+928	  final String time;
+929	  final String statusText;
+930	  final Color statusColor;
+931	  final AttendanceStatus? activeStatus;
+932	  final VoidCallback onPresent;
+933	  final VoidCallback onAbsent;
+934	  final VoidCallback onCancel;
+935	  final bool swipeEnabled;
+936	  final VoidCallback? onSwipePresent;
+937	  final VoidCallback? onSwipeAbsent;
+938	
+939	  const _LectureCard({
+940	    required this.idKey,
+941	    required this.title,
+942	    required this.time,
+943	    required this.statusText,
+944	    required this.statusColor,
+945	    required this.activeStatus,
+946	    required this.onPresent,
+947	    required this.onAbsent,
+948	    required this.onCancel,
+949	    this.swipeEnabled = true,
+950	    this.onSwipePresent,
+951	    this.onSwipeAbsent,
+952	  });
+953	
+954	  @override
+955	  Widget build(BuildContext context) {
+956	    final card = Card(
+957	      margin: const EdgeInsets.only(bottom: 10),
+958	      child: Padding(
+959	        padding: const EdgeInsets.all(12),
+960	        child: Column(
+961	          crossAxisAlignment: CrossAxisAlignment.start,
+962	          children: [
+963	            Text(
+964	              title,
+965	              style: const TextStyle(fontWeight: FontWeight.w700),
+966	            ),
+967	            const SizedBox(height: 4),
+968	            Row(
+969	              children: [
+970	                Icon(Icons.schedule, size: 16, color: statusColor),
+971	                const SizedBox(width: 6),
+972	                Text(time),
+973	                const Spacer(),
+974	                Text(
+975	                  statusText,
+976	                  style: TextStyle(color: statusColor),
+977	                ),
+978	              ],
+979	            ),
+980	            const SizedBox(height: 8),
+981	            Row(
+982	              children: [
+983	                _ActionPill(
+984	                  label: "Present",
+985	                  color: Colors.green,
+986	                  active: activeStatus == AttendanceStatus.present,
+987	                  onTap: onPresent,
+988	                ),
+989	                const SizedBox(width: 8),
+990	                _ActionPill(
+991	                  label: "Absent",
+992	                  color: Colors.red,
+993	                  active: activeStatus == AttendanceStatus.absent,
+994	                  onTap: onAbsent,
+995	                ),
+996	                const SizedBox(width: 8),
+997	                _ActionPill(
+998	                  label: "Cancel",
+999	                  color: Colors.orange,
+1000	                  active: activeStatus == AttendanceStatus.cancelled,
+1001	                  onTap: onCancel,
+1002	                ),
+1003	              ],
+1004	            ),
+1005	          ],
+1006	        ),
+1007	      ),
+1008	    );
+1009	    if (!swipeEnabled) return card;
+1010	    return Dismissible(
+1011	      key: ValueKey(idKey),
+1012	      confirmDismiss: (direction) async {
+1013	        if (direction == DismissDirection.startToEnd) {
+1014	          onSwipePresent?.call();
+1015	        } else if (direction == DismissDirection.endToStart) {
+1016	          onSwipeAbsent?.call();
+1017	        }
+1018	        return false;
+1019	      },
+1020	      background: Container(
+1021	        margin: const EdgeInsets.only(bottom: 10),
+1022	        padding: const EdgeInsets.symmetric(horizontal: 16),
+1023	        alignment: Alignment.centerLeft,
+1024	        decoration: BoxDecoration(
+1025	          color: Colors.green.withValues(alpha: 0.2),
+1026	          borderRadius: BorderRadius.circular(16),
+1027	        ),
+1028	        child: const Icon(Icons.check_circle, color: Colors.green),
+1029	      ),
+1030	      secondaryBackground: Container(
+1031	        margin: const EdgeInsets.only(bottom: 10),
+1032	        padding: const EdgeInsets.symmetric(horizontal: 16),
+1033	        alignment: Alignment.centerRight,
+1034	        decoration: BoxDecoration(
+1035	          color: Colors.red.withValues(alpha: 0.2),
+1036	          borderRadius: BorderRadius.circular(16),
+1037	        ),
+1038	        child: const Icon(Icons.cancel, color: Colors.red),
+1039	      ),
+1040	      child: card,
+1041	    );
+1042	  }
+1043	}
+1044	
+1045	class _ActionPill extends StatelessWidget {
+1046	  final String label;
+1047	  final Color color;
+1048	  final bool active;
+1049	  final VoidCallback onTap;
+1050	
+1051	  const _ActionPill({
+1052	    required this.label,
+1053	    required this.color,
+1054	    required this.active,
+1055	    required this.onTap,
+1056	  });
+1057	
+1058	  @override
+1059	  Widget build(BuildContext context) {
+1060	    return Expanded(
+1061	      child: OutlinedButton(
+1062	        onPressed: onTap,
+1063	        style: OutlinedButton.styleFrom(
+1064	          padding: const EdgeInsets.symmetric(vertical: 10),
+1065	          backgroundColor: active ? color.withValues(alpha: 0.12) : Colors.transparent,
+1066	          side: BorderSide(color: active ? color : color.withValues(alpha: 0.3)),
+1067	          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+1068	        ),
+1069	        child: Text(
+1070	          label,
+1071	          style: TextStyle(
+1072	            color: active ? color : Theme.of(context).colorScheme.onSurface,
+1073	            fontWeight: FontWeight.w600,
+1074	          ),
+1075	        ),
+1076	      ),
+1077	    );
+1078	    });
+1079	  }
+1080	}
+1081	
+1082	class _StatusData {
+1083	  final String text;
+1084	  final Color color;
+1085	  _StatusData(this.text, this.color);
+1086	}
+1087	
+1088	class _LectureEntry {
+1089	  final Subject subject;
+1090	  final LectureSlot slot;
+1091	  final int slotIndex;
+1092	  final int originalWeekday;
+1093	
+1094	  _LectureEntry({
+1095	    required this.subject,
+1096	    required this.slot,
+1097	    required this.slotIndex,
+1098	    required this.originalWeekday,
+1099	  });
+1100	}
+1101	
